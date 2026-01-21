@@ -35,8 +35,8 @@ app.post('/api/chat', async (req, res) => {
       return res.status(500).json({ error: 'Gemini API key not configured' });
     }
 
-    // ✅ Chọn model (mặc định dùng flash vì miễn phí + nhanh)
-    const selectedModel = model || 'gemini-1.5-flash';
+    // ✅ Chọn model (mặc định dùng flash-latest vì miễn phí + nhanh)
+    const selectedModel = model || 'gemini-1.5-flash-latest';
     const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${GEMINI_API_KEY}`;
 
     console.log(`[Chat] Using model: ${selectedModel}`);
@@ -221,7 +221,7 @@ app.get('/api/test-gemini', async (req, res) => {
       });
     }
 
-    const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
 
     const response = await axios.post(GEMINI_URL, {
       contents: [{
