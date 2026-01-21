@@ -14,9 +14,38 @@ app.post('/api/chat', async (req, res) => {
   try {
     const { message, chatHistory, financialContext } = req.body;
 
+    // Validate request
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
     }
+
+    // Call OpenAI API
+    // Build messages array with system prompt
+    const messages = [];
+    
+    // Add system prompt with financial context if provided
+    if (financialContext) {
+      messages.push({
+        role: 'system',
+        content: financialContext
+      });
+    } else {
+      messages.push({
+        role: 'system',
+        content: 'You are a helpful financial assistant.'
+      });
+    }
+    
+    // Add chat history
+    if (chatHistory && Array.isArray(chatHistory)) {
+      messages.push(...chatHistory);
+    }
+    
+    // Add current user message
+    messages.push({
+      role: 'user',
+      content: message
+    });
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -25,18 +54,8 @@ app.post('/api/chat', async (req, res) => {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a helpful financial assistant.'
-          },
-          ...(chatHistory || []),
-          {
-            role: 'user',
-            content: message
-          }
-        ],
+        model: req.body.model || 'gpt-4o-mini',  // Support model selection from client
+        messages: messages,
         max_tokens: 500,
         temperature: 0.7
       })
@@ -59,6 +78,7 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
