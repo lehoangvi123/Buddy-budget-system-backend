@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
@@ -9,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Endpoint để xử lý chat request
+// Endpoint để xử lý chat request với Gemini
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, chatHistory, financialContext } = req.body;
@@ -19,78 +20,114 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    // Call OpenAI API
-    // Build messages array with system prompt
-    const messages = [];
+    // ✅ GEMINI API KEY
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     
-    // Add system prompt with financial context if provided
+    if (!GEMINI_API_KEY) {
+      return res.status(500).json({ error: 'Gemini API key not configured' });
+    }
+
+    // ✅ Chọn model (mặc định dùng flash vì rẻ + nhanh)
+    const model = req.body.model || 'gemini-1.5-flash';
+    const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+    // ✅ Build contents array cho Gemini
+    const contents = [];
+    
+    // Thêm system prompt + financial context vào đầu (như một user message)
     if (financialContext) {
-      messages.push({
-        role: 'system',
-        content: financialContext
+      contents.push({
+        role: 'user',
+        parts: [{ text: financialContext }]
       });
-    } else {
-      messages.push({
-        role: 'system',
-        content: 'You are a helpful financial assistant.'
+      // Gemini cần response từ model sau system prompt
+      contents.push({
+        role: 'model',
+        parts: [{ text: 'Tôi hiểu. Tôi sẽ giúp bạn với vai trò trợ lý tài chính dựa trên thông tin này.' }]
       });
     }
-    
-    // Add chat history - validate each message
+
+    // Thêm chat history (chuyển role 'assistant' thành 'model')
     if (chatHistory && Array.isArray(chatHistory)) {
       for (const msg of chatHistory) {
-        // Only add valid messages with both role and content
         if (msg.role && msg.content && typeof msg.content === 'string' && msg.content.trim()) {
-          messages.push({
-            role: msg.role,
-            content: msg.content
+          contents.push({
+            role: msg.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: msg.content }]
           });
         }
       }
     }
-    
-    // Add current user message
-    messages.push({
+
+    // Thêm tin nhắn hiện tại của user
+    contents.push({
       role: 'user',
-      content: message
+      parts: [{ text: message }]
     });
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+    // ✅ Gọi Gemini API
+    const response = await axios.post(GEMINI_URL, {
+      contents: contents,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 500,
+        topP: 0.8,
+        topK: 40
       },
-      body: JSON.stringify({
-        model: req.body.model || 'gpt-4o-mini',  // Support model selection from client
-        messages: messages,
-        max_tokens: 500,
-        temperature: 0.7
-      })
+      safetySettings: [
+        {
+          category: 'HARM_CATEGORY_HARASSMENT',
+          threshold: 'BLOCK_NONE'
+        },
+        {
+          category: 'HARM_CATEGORY_HATE_SPEECH',
+          threshold: 'BLOCK_NONE'
+        },
+        {
+          category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+          threshold: 'BLOCK_NONE'
+        },
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_NONE'
+        }
+      ]
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      return res.status(response.status).json({ error: error.error?.message || 'OpenAI API error' });
-    }
-
-    const data = await response.json();
+    // ✅ Trích xuất response từ Gemini
+    const aiMessage = response.data.candidates[0].content.parts[0].text;
+    
     res.json({
-      message: data.choices[0].message.content,
-      usage: data.usage
+      message: aiMessage,
+      usage: {
+        promptTokens: response.data.usageMetadata?.promptTokenCount || 0,
+        completionTokens: response.data.usageMetadata?.candidatesTokenCount || 0,
+        totalTokens: response.data.usageMetadata?.totalTokenCount || 0
+      }
     });
 
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('❌ Gemini Error:', error.response?.data || error.message);
+    
+    // Trả về lỗi chi tiết hơn
+    const errorMessage = error.response?.data?.error?.message || error.message || 'Internal server error';
+    res.status(500).json({ 
+      error: errorMessage,
+      details: error.response?.data
+    });
   }
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    geminiConfigured: !!process.env.GEMINI_API_KEY
+  });
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`✅ Gemini API: ${process.env.GEMINI_API_KEY ? 'Configured' : '❌ Missing'}`);
 });
