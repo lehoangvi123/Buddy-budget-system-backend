@@ -36,9 +36,17 @@ app.post('/api/chat', async (req, res) => {
       });
     }
     
-    // Add chat history
+    // Add chat history - validate each message
     if (chatHistory && Array.isArray(chatHistory)) {
-      messages.push(...chatHistory);
+      for (const msg of chatHistory) {
+        // Only add valid messages with both role and content
+        if (msg.role && msg.content && typeof msg.content === 'string' && msg.content.trim()) {
+          messages.push({
+            role: msg.role,
+            content: msg.content
+          });
+        }
+      }
     }
     
     // Add current user message
