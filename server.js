@@ -12,12 +12,12 @@ app.use(express.json());
 
 // ✅ Log khi server khởi động
 console.log('=== Server Starting ===');
-console.log('GROK_API_KEY:', process.env.GROK_API_KEY ? '✅ Loaded' : '❌ Not found');
+console.log('GROQ_API_KEY:', process.env.GROQ_API_KEY ? '✅ Loaded' : '❌ Not found');
 console.log('NODE_ENV:', process.env.NODE_ENV);
 console.log('PORT:', PORT);
 console.log('=======================');
 
-// Endpoint để xử lý chat request với Grok
+// Endpoint để xử lý chat request với Groq
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, chatHistory, financialContext, model } = req.body;
@@ -27,22 +27,22 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    // ✅ GROK API KEY
-    const GROK_API_KEY = process.env.GROK_API_KEY;
+    // ✅ GROQ API KEY
+    const GROQ_API_KEY = process.env.GROQ_API_KEY;
     
-    if (!GROK_API_KEY) { 
-      console.error('❌ GROK_API_KEY not configured!');
-      return res.status(500).json({ error: 'Grok API key not configured' });
+    if (!GROQ_API_KEY) { 
+      console.error('❌ GROQ_API_KEY not configured!');
+      return res.status(500).json({ error: 'Groq API key not configured' });
     }
 
-    // ✅ Chọn model Grok (mặc định dùng grok-beta)
-    const selectedModel = model || 'grok-beta';
-    const GROK_URL = 'https://api.x.ai/v1/chat/completions';
+    // ✅ Chọn model Groq (mặc định llama-3.3-70b - MIỄN PHÍ & MẠNH)
+    const selectedModel = model || 'llama-3.3-70b-versatile';
+    const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
     console.log(`[Chat] Using model: ${selectedModel}`);
     console.log(`[Chat] User message: ${message.substring(0, 50)}...`);
 
-    // ✅ Build messages array cho Grok (OpenAI-compatible format)
+    // ✅ Build messages array cho Groq (OpenAI-compatible format)
     const messages = [];
     
     // Thêm system prompt + financial context
@@ -61,7 +61,7 @@ app.post('/api/chat', async (req, res) => {
           continue;
         }
         
-        // Grok dùng format OpenAI: 'user', 'assistant', 'system'
+        // Groq dùng format OpenAI: 'user', 'assistant', 'system'
         const role = msg.role === 'model' ? 'assistant' : msg.role;
         
         // Chỉ chấp nhận role hợp lệ
@@ -82,23 +82,24 @@ app.post('/api/chat', async (req, res) => {
       content: message
     });
 
-    console.log(`[Chat] Sending ${messages.length} messages to Grok...`);
+    console.log(`[Chat] Sending ${messages.length} messages to Groq...`);
 
-    // ✅ Gọi Grok API
+    // ✅ Gọi Groq API
     const response = await axios.post(
-      GROK_URL,
+      GROQ_URL,
       {
         messages: messages,
         model: selectedModel,
-        stream: false,
         temperature: 0.7,
         max_tokens: 800,
+        top_p: 0.9,
+        stream: false,
       },
       {
         timeout: 30000,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${GROK_API_KEY}`
+          'Authorization': `Bearer ${GROQ_API_KEY}`
         },
         validateStatus: function (status) {
           return status >= 200 && status < 500;
@@ -109,27 +110,27 @@ app.post('/api/chat', async (req, res) => {
     // ✅ Kiểm tra response type
     const contentType = response.headers['content-type'];
     if (!contentType || !contentType.includes('application/json')) {
-      console.error('❌ Grok returned non-JSON response:', response.data);
+      console.error('❌ Groq returned non-JSON response:', response.data);
       return res.status(500).json({ 
-        error: 'Grok API returned invalid response format',
+        error: 'Groq API returned invalid response format',
         details: 'Expected JSON but got ' + contentType
       });
     }
 
     // Kiểm tra HTTP status
     if (response.status !== 200) {
-      console.error('❌ Grok API error:', response.status, response.data);
+      console.error('❌ Groq API error:', response.status, response.data);
       return res.status(response.status).json({ 
-        error: response.data?.error?.message || 'Grok API error',
+        error: response.data?.error?.message || 'Groq API error',
         details: response.data
       });
     }
 
-    // ✅ Kiểm tra response từ Grok
+    // ✅ Kiểm tra response từ Groq
     if (!response.data || !response.data.choices || response.data.choices.length === 0) {
-      console.error('❌ No choices in Grok response:', response.data);
+      console.error('❌ No choices in Groq response:', response.data);
       return res.status(500).json({ 
-        error: 'Grok không trả về phản hồi hợp lệ',
+        error: 'Groq không trả về phản hồi hợp lệ',
         details: response.data
       });
     }
@@ -138,9 +139,9 @@ app.post('/api/chat', async (req, res) => {
     const aiMessage = choice.message?.content;
     
     if (!aiMessage) {
-      console.error('❌ No content in Grok response:', choice);
+      console.error('❌ No content in Groq response:', choice);
       return res.status(500).json({ 
-        error: 'Grok không trả về nội dung text',
+        error: 'Groq không trả về nội dung text',
         details: choice
       });
     }
@@ -159,7 +160,7 @@ app.post('/api/chat', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Grok Error:', error.response?.data || error.message);
+    console.error('❌ Groq Error:', error.response?.data || error.message);
     
     // Xử lý các lỗi phổ biến
     let errorMessage = 'Internal server error';
@@ -167,15 +168,15 @@ app.post('/api/chat', async (req, res) => {
     let errorDetails = null;
 
     if (error.code === 'ECONNABORTED') {
-      errorMessage = 'Request timeout - Grok API mất quá nhiều thời gian';
+      errorMessage = 'Request timeout - Groq API mất quá nhiều thời gian';
       statusCode = 504;
     } else if (error.response) {
       statusCode = error.response.status;
       errorDetails = error.response.data;
       
-      // Xử lý các lỗi phổ biến của Grok
+      // Xử lý các lỗi phổ biến của Groq
       if (statusCode === 400) {
-        errorMessage = 'Invalid request to Grok API';
+        errorMessage = 'Invalid request to Groq API';
         if (errorDetails?.error?.message) {
           errorMessage = errorDetails.error.message;
         }
@@ -186,17 +187,17 @@ app.post('/api/chat', async (req, res) => {
       } else if (statusCode === 429) {
         errorMessage = 'Đã vượt quá giới hạn request. Vui lòng thử lại sau';
       } else if (statusCode === 500) {
-        errorMessage = 'Grok API đang gặp sự cố';
+        errorMessage = 'Groq API đang gặp sự cố';
       } else {
-        errorMessage = errorDetails?.error?.message || 'Grok API error';
+        errorMessage = errorDetails?.error?.message || 'Groq API error';
       }
       
-      console.error('Grok API Error Details:', {
+      console.error('Groq API Error Details:', {
         status: statusCode,
         data: errorDetails
       });
     } else if (error.request) {
-      errorMessage = 'Không thể kết nối với Grok API';
+      errorMessage = 'Không thể kết nối với Groq API';
       statusCode = 503;
     } else {
       errorMessage = error.message || 'Unknown error';
@@ -215,49 +216,49 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    grokConfigured: !!process.env.GROK_API_KEY,
+    groqConfigured: !!process.env.GROQ_API_KEY,
     nodeVersion: process.version,
     uptime: process.uptime()
   });
 });
 
-// Test Grok connection endpoint
-app.get('/api/test-grok', async (req, res) => {
+// Test Groq connection endpoint
+app.get('/api/test-groq', async (req, res) => {
   try {
-    const GROK_API_KEY = process.env.GROK_API_KEY;
+    const GROQ_API_KEY = process.env.GROQ_API_KEY;
     
-    if (!GROK_API_KEY) {
+    if (!GROQ_API_KEY) {
       return res.status(500).json({ 
         success: false, 
-        error: 'GROK_API_KEY not configured' 
+        error: 'GROQ_API_KEY not configured' 
       });
     }
 
-    const GROK_URL = 'https://api.x.ai/v1/chat/completions';
+    const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
     const response = await axios.post(
-      GROK_URL,
+      GROQ_URL,
       {
         messages: [
           {
             role: 'system',
-            content: 'You are Grok, a helpful AI assistant. Respond in Vietnamese.'
+            content: 'You are a helpful AI assistant. Always respond in Vietnamese.'
           },
           {
             role: 'user',
-            content: 'Xin chào! Hãy giới thiệu về bản thân.'
+            content: 'Xin chào! Hãy giới thiệu về bản thân bằng tiếng Việt.'
           }
         ],
-        model: 'grok-beta',
-        stream: false,
+        model: 'llama-3.3-70b-versatile',
         temperature: 0,
-        max_tokens: 100
+        max_tokens: 100,
+        stream: false
       },
       {
         timeout: 10000,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${GROK_API_KEY}`
+          'Authorization': `Bearer ${GROQ_API_KEY}`
         },
         validateStatus: function (status) {
           return status >= 200 && status < 500;
@@ -268,7 +269,7 @@ app.get('/api/test-grok', async (req, res) => {
     if (response.status !== 200) {
       return res.status(response.status).json({
         success: false,
-        error: response.data?.error?.message || 'Grok API error',
+        error: response.data?.error?.message || 'Groq API error',
         details: response.data
       });
     }
@@ -277,13 +278,13 @@ app.get('/api/test-grok', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Grok API hoạt động tốt!',
+      message: 'Groq API hoạt động tốt!',
       testResponse: aiMessage,
-      model: 'grok-beta'
+      model: 'llama-3.3-70b-versatile'
     });
 
   } catch (error) {
-    console.error('Test Grok Error:', error.response?.data || error.message);
+    console.error('Test Groq Error:', error.response?.data || error.message);
     res.status(500).json({
       success: false,
       error: error.response?.data?.error?.message || error.message,
@@ -310,7 +311,7 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 Server running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/health`);
-  console.log(`🧪 Test Grok: http://localhost:${PORT}/api/test-grok`);
+  console.log(`🧪 Test Groq: http://localhost:${PORT}/api/test-groq`);
   console.log(`💬 Chat endpoint: POST http://localhost:${PORT}/api/chat\n`);
 });
 
