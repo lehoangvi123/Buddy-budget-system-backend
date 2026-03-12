@@ -126,7 +126,7 @@ async function callGroq(messages, systemPrompt) {
 }
 
 // ============================================================
-// ✅ /api/chat — Gemini primary, Groq fallback
+// ✅ /api/chat — Groq primary, Gemini fallback
 // ============================================================
 app.post('/api/chat', async (req, res) => {
   try {
@@ -152,28 +152,28 @@ app.post('/api/chat', async (req, res) => {
 
     let result = null;
 
-    // ✅ Thử Gemini trước
+    // ✅ Thử Groq trước
     try {
-      console.log('[Chat] Trying Gemini...');
-      result = await callGemini(historyMessages, financialContext || '');
-      console.log(`[Chat] ✅ Gemini success (${result.text.length} chars)`);
-    } catch (geminiErr) {
-      console.warn('[Chat] ⚠️ Gemini failed:', geminiErr.message);
+      console.log('[Chat] Trying Groq...');
+      result = await callGroq(historyMessages, financialContext || '');
+      console.log(`[Chat] ✅ Groq success (${result.text.length} chars)`);
+    } catch (groqErr) {
+      console.warn('[Chat] ⚠️ Groq failed:', groqErr.message);
 
-      // ✅ Fallback sang Groq
+      // ✅ Fallback sang Gemini
       try {
-        console.log('[Chat] Trying Groq fallback...');
-        result = await callGroq(historyMessages, financialContext || '');
-        console.log(`[Chat] ✅ Groq fallback success (${result.text.length} chars)`);
-      } catch (groqErr) {
+        console.log('[Chat] Trying Gemini fallback...');
+        result = await callGemini(historyMessages, financialContext || '');
+        console.log(`[Chat] ✅ Gemini fallback success (${result.text.length} chars)`);
+      } catch (geminiErr) {
         console.error('[Chat] ❌ Both providers failed');
-        console.error('Gemini error:', geminiErr.message);
         console.error('Groq error:', groqErr.message);
+        console.error('Gemini error:', geminiErr.message);
         return res.status(500).json({
-          error: 'Cả hai AI provider đều không phản hồi. Vui lòng thử lại!',
+          error: 'Cả hai AI provider đều không phản hồi. Vui lòng thử lại sau!',
           details: {
-            gemini: geminiErr.message,
-            groq: groqErr.message
+            groq: groqErr.message,
+            gemini: geminiErr.message
           }
         });
       }
