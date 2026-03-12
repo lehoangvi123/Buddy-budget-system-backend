@@ -6,317 +6,257 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// ✅ Log khi server khởi động
 console.log('=== Server Starting ===');
-console.log('GROQ_API_KEY:', process.env.GROQ_API_KEY ? '✅ Loaded' : '❌ Not found');
-console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? '✅ Loaded' : '❌ Not found');
+console.log('GROQ_API_KEY:  ', process.env.GROQ_API_KEY   ? '✅ Loaded' : '❌ Not found');
 console.log('PORT:', PORT);
 console.log('=======================');
 
-// Endpoint để xử lý chat request với Groq
+// ============================================================
+// ✅ GEMINI HANDLER (Primary)
+// ============================================================
+async function callGemini(messages, systemPrompt) {
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
+
+  const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+  // Build contents array (Gemini format)
+  const contents = [];
+
+  for (const msg of messages) {
+    if (!msg.content || !msg.content.trim()) continue;
+    // Gemini dùng 'user' và 'model' (không dùng 'assistant')
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    if (role !== 'user' && role !== 'model') continue;
+    contents.push({
+      role: role,
+      parts: [{ text: msg.content.trim() }]
+    });
+  }
+
+  const body = {
+    contents: contents,
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 2048,
+      topP: 0.9,
+    }
+  };
+
+  // Thêm system prompt nếu có
+  if (systemPrompt) {
+    body.systemInstruction = {
+      parts: [{ text: systemPrompt }]
+    };
+  }
+
+  const response = await axios.post(GEMINI_URL, body, {
+    timeout: 60000,
+    headers: { 'Content-Type': 'application/json' },
+    validateStatus: s => s < 600
+  });
+
+  if (response.status !== 200) {
+    throw new Error(`Gemini error ${response.status}: ${JSON.stringify(response.data)}`);
+  }
+
+  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Gemini returned empty response');
+
+  return { text, provider: 'gemini' };
+}
+
+// ============================================================
+// ✅ GROQ HANDLER (Fallback)
+// ============================================================
+async function callGroq(messages, systemPrompt) {
+  const GROQ_API_KEY = process.env.GROQ_API_KEY;
+  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY not configured');
+
+  const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+  const selectedModel = 'llama-3.3-70b-versatile';
+
+  const groqMessages = [];
+
+  // System prompt
+  if (systemPrompt) {
+    groqMessages.push({ role: 'system', content: systemPrompt });
+  }
+
+  // History
+  for (const msg of messages) {
+    if (!msg.content || !msg.content.trim()) continue;
+    const role = msg.role === 'model' ? 'assistant' : msg.role;
+    if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
+    groqMessages.push({ role, content: msg.content.trim() });
+  }
+
+  const response = await axios.post(
+    GROQ_URL,
+    {
+      messages: groqMessages,
+      model: selectedModel,
+      temperature: 0.7,
+      max_tokens: 800,
+      top_p: 0.9,
+      stream: false,
+    },
+    {
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GROQ_API_KEY}`
+      },
+      validateStatus: s => s < 600
+    }
+  );
+
+  if (response.status !== 200) {
+    throw new Error(`Groq error ${response.status}: ${JSON.stringify(response.data)}`);
+  }
+
+  const text = response.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Groq returned empty response');
+
+  return { text, provider: 'groq' };
+}
+
+// ============================================================
+// ✅ /api/chat — Gemini primary, Groq fallback
+// ============================================================
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, chatHistory, financialContext, model } = req.body;
+    const { message, chatHistory, financialContext } = req.body;
 
-    // Validate request
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    // ✅ GROQ API KEY
-    const GROQ_API_KEY = process.env.GROQ_API_KEY;
-    
-    if (!GROQ_API_KEY) { 
-      console.error('❌ GROQ_API_KEY not configured!');
-      return res.status(500).json({ error: 'Groq API key not configured' });
-    }
-
-    // ✅ Chọn model Groq (mặc định llama-3.3-70b - MIỄN PHÍ & MẠNH)
-    const selectedModel = model || 'llama-3.3-70b-versatile';
-    const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-
-    console.log(`[Chat] Using model: ${selectedModel}`);
-    console.log(`[Chat] User message: ${message.substring(0, 50)}...`);
-
-    // ✅ Build messages array cho Groq (OpenAI-compatible format)
-    const messages = [];
-    
-    // Thêm system prompt + financial context
-    if (financialContext) {
-      messages.push({
-        role: 'system',
-        content: financialContext
-      });
-    }
-
-    // Thêm chat history
+    // Build history messages
+    const historyMessages = [];
     if (chatHistory && Array.isArray(chatHistory)) {
       for (const msg of chatHistory) {
-        // Validate message
-        if (!msg.content || typeof msg.content !== 'string' || !msg.content.trim()) {
-          continue;
-        }
-        
-        // Groq dùng format OpenAI: 'user', 'assistant', 'system'
-        const role = msg.role === 'model' ? 'assistant' : msg.role;
-        
-        // Chỉ chấp nhận role hợp lệ
-        if (role !== 'user' && role !== 'assistant' && role !== 'system') {
-          continue;
-        }
+        if (!msg.content || typeof msg.content !== 'string' || !msg.content.trim()) continue;
+        historyMessages.push({ role: msg.role, content: msg.content.trim() });
+      }
+    }
 
-        messages.push({
-          role: role,
-          content: msg.content.trim()
+    // Add current user message
+    historyMessages.push({ role: 'user', content: message });
+
+    console.log(`[Chat] Message: "${message.substring(0, 60)}..."`);
+
+    let result = null;
+
+    // ✅ Thử Gemini trước
+    try {
+      console.log('[Chat] Trying Gemini...');
+      result = await callGemini(historyMessages, financialContext || '');
+      console.log(`[Chat] ✅ Gemini success (${result.text.length} chars)`);
+    } catch (geminiErr) {
+      console.warn('[Chat] ⚠️ Gemini failed:', geminiErr.message);
+
+      // ✅ Fallback sang Groq
+      try {
+        console.log('[Chat] Trying Groq fallback...');
+        result = await callGroq(historyMessages, financialContext || '');
+        console.log(`[Chat] ✅ Groq fallback success (${result.text.length} chars)`);
+      } catch (groqErr) {
+        console.error('[Chat] ❌ Both providers failed');
+        console.error('Gemini error:', geminiErr.message);
+        console.error('Groq error:', groqErr.message);
+        return res.status(500).json({
+          error: 'Cả hai AI provider đều không phản hồi. Vui lòng thử lại!',
+          details: {
+            gemini: geminiErr.message,
+            groq: groqErr.message
+          }
         });
       }
     }
 
-    // Thêm tin nhắn hiện tại của user
-    messages.push({
-      role: 'user',
-      content: message
-    });
-
-    console.log(`[Chat] Sending ${messages.length} messages to Groq...`);
-
-    // ✅ Gọi Groq API
-    const response = await axios.post(
-      GROQ_URL,
-      {
-        messages: messages,
-        model: selectedModel,
-        temperature: 0.7,
-        max_tokens: 800,
-        top_p: 0.9,
-        stream: false,
-      },
-      {
-        timeout: 30000,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${GROQ_API_KEY}`
-        },
-        validateStatus: function (status) {
-          return status >= 200 && status < 500;
-        }
-      }
-    );
-
-    // ✅ Kiểm tra response type
-    const contentType = response.headers['content-type'];
-    if (!contentType || !contentType.includes('application/json')) {
-      console.error('❌ Groq returned non-JSON response:', response.data);
-      return res.status(500).json({ 
-        error: 'Groq API returned invalid response format',
-        details: 'Expected JSON but got ' + contentType
-      });
-    }
-
-    // Kiểm tra HTTP status
-    if (response.status !== 200) {
-      console.error('❌ Groq API error:', response.status, response.data);
-      return res.status(response.status).json({ 
-        error: response.data?.error?.message || 'Groq API error',
-        details: response.data
-      });
-    }
-
-    // ✅ Kiểm tra response từ Groq
-    if (!response.data || !response.data.choices || response.data.choices.length === 0) {
-      console.error('❌ No choices in Groq response:', response.data);
-      return res.status(500).json({ 
-        error: 'Groq không trả về phản hồi hợp lệ',
-        details: response.data
-      });
-    }
-
-    const choice = response.data.choices[0];
-    const aiMessage = choice.message?.content;
-    
-    if (!aiMessage) {
-      console.error('❌ No content in Groq response:', choice);
-      return res.status(500).json({ 
-        error: 'Groq không trả về nội dung text',
-        details: choice
-      });
-    }
-
-    console.log(`[Chat] ✅ Response received (${aiMessage.length} chars)`);
-    
-    // ✅ ALWAYS return JSON
     return res.status(200).json({
-      message: aiMessage,
-      model: selectedModel,
-      usage: {
-        promptTokens: response.data.usage?.prompt_tokens || 0,
-        completionTokens: response.data.usage?.completion_tokens || 0,
-        totalTokens: response.data.usage?.total_tokens || 0
-      }
+      message: result.text,
+      provider: result.provider,
     });
 
   } catch (error) {
-    console.error('❌ Groq Error:', error.response?.data || error.message);
-    
-    // Xử lý các lỗi phổ biến
-    let errorMessage = 'Internal server error';
-    let statusCode = 500;
-    let errorDetails = null;
-
-    if (error.code === 'ECONNABORTED') {
-      errorMessage = 'Request timeout - Groq API mất quá nhiều thời gian';
-      statusCode = 504;
-    } else if (error.response) {
-      statusCode = error.response.status;
-      errorDetails = error.response.data;
-      
-      // Xử lý các lỗi phổ biến của Groq
-      if (statusCode === 400) {
-        errorMessage = 'Invalid request to Groq API';
-        if (errorDetails?.error?.message) {
-          errorMessage = errorDetails.error.message;
-        }
-      } else if (statusCode === 401) {
-        errorMessage = 'API key không hợp lệ';
-      } else if (statusCode === 403) {
-        errorMessage = 'API key không có quyền truy cập';
-      } else if (statusCode === 429) {
-        errorMessage = 'Đã vượt quá giới hạn request. Vui lòng thử lại sau';
-      } else if (statusCode === 500) {
-        errorMessage = 'Groq API đang gặp sự cố';
-      } else {
-        errorMessage = errorDetails?.error?.message || 'Groq API error';
-      }
-      
-      console.error('Groq API Error Details:', {
-        status: statusCode,
-        data: errorDetails
-      });
-    } else if (error.request) {
-      errorMessage = 'Không thể kết nối với Groq API';
-      statusCode = 503;
-    } else {
-      errorMessage = error.message || 'Unknown error';
-    }
-
-    // ✅ ALWAYS return JSON even on error
-    return res.status(statusCode).json({ 
-      error: errorMessage,
-      details: errorDetails || error.message
+    console.error('❌ Unexpected error:', error.message);
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
     });
   }
 });
 
-// Health check endpoint
+// ============================================================
+// ✅ Health check
+// ============================================================
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
+    geminiConfigured: !!process.env.GEMINI_API_KEY,
     groqConfigured: !!process.env.GROQ_API_KEY,
     nodeVersion: process.version,
     uptime: process.uptime()
   });
 });
 
-// Test Groq connection endpoint
-app.get('/api/test-groq', async (req, res) => {
+// ============================================================
+// ✅ Test Gemini
+// ============================================================
+app.get('/api/test-gemini', async (req, res) => {
   try {
-    const GROQ_API_KEY = process.env.GROQ_API_KEY;
-    
-    if (!GROQ_API_KEY) {
-      return res.status(500).json({ 
-        success: false, 
-        error: 'GROQ_API_KEY not configured' 
-      });
-    }
-
-    const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-
-    const response = await axios.post(
-      GROQ_URL,
-      {
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a helpful AI assistant. Always respond in Vietnamese.'
-          },
-          {
-            role: 'user',
-            content: 'Xin chào! Hãy giới thiệu về bản thân bằng tiếng Việt.'
-          }
-        ],
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0,
-        max_tokens: 100,
-        stream: false
-      },
-      {
-        timeout: 10000,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${GROQ_API_KEY}`
-        },
-        validateStatus: function (status) {
-          return status >= 200 && status < 500;
-        }
-      }
+    const result = await callGemini(
+      [{ role: 'user', content: 'Xin chào! Giới thiệu bản thân bằng tiếng Việt ngắn gọn.' }],
+      'Bạn là BuddyAI, trợ lý tài chính thông minh.'
     );
-
-    if (response.status !== 200) {
-      return res.status(response.status).json({
-        success: false,
-        error: response.data?.error?.message || 'Groq API error',
-        details: response.data
-      });
-    }
-
-    const aiMessage = response.data.choices[0].message.content;
-
-    res.json({
-      success: true,
-      message: 'Groq API hoạt động tốt!',
-      testResponse: aiMessage,
-      model: 'llama-3.3-70b-versatile'
-    });
-
+    res.json({ success: true, message: 'Gemini hoạt động tốt!', testResponse: result.text });
   } catch (error) {
-    console.error('Test Groq Error:', error.response?.data || error.message);
-    res.status(500).json({
-      success: false,
-      error: error.response?.data?.error?.message || error.message,
-      details: error.response?.data
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// 404 handler
+// ============================================================
+// ✅ Test Groq
+// ============================================================
+app.get('/api/test-groq', async (req, res) => {
+  try {
+    const result = await callGroq(
+      [{ role: 'user', content: 'Xin chào! Giới thiệu bản thân bằng tiếng Việt ngắn gọn.' }],
+      'Bạn là BuddyAI, trợ lý tài chính thông minh.'
+    );
+    res.json({ success: true, message: 'Groq hoạt động tốt!', testResponse: result.text });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 404
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-// Error handler middleware
+// Error handler
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
-  res.status(500).json({ 
-    error: 'Internal server error',
-    details: err.message
-  });
+  res.status(500).json({ error: 'Internal server error', details: err.message });
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`\n🚀 Server running on port ${PORT}`);
-  console.log(`📍 Health check: http://localhost:${PORT}/health`);
-  console.log(`🧪 Test Groq: http://localhost:${PORT}/api/test-groq`);
-  console.log(`💬 Chat endpoint: POST http://localhost:${PORT}/api/chat\n`);
+  console.log(`📍 Health: http://localhost:${PORT}/health`);
+  console.log(`🧪 Test Gemini: http://localhost:${PORT}/api/test-gemini`);
+  console.log(`🧪 Test Groq:   http://localhost:${PORT}/api/test-groq`);
+  console.log(`💬 Chat: POST http://localhost:${PORT}/api/chat\n`);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
+  console.log('SIGTERM received: shutting down');
   process.exit(0);
 });
