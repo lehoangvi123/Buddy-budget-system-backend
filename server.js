@@ -13,10 +13,15 @@ const PORT = process.env.PORT || 3000;
 // 📌 Middleware
 // ==========================
 app.use(cors({
-  origin: '*', // hoặc thay bằng domain web của bạn: 'https://yourdomain.com'
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: '*', // hoặc thay bằng domain cụ thể: 'http://localhost:3000' / 'https://yourdomain.com'
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin'],
+  credentials: true
 }));
+
+// xử lý preflight request (OPTIONS)
+app.options('*', cors());
+
 app.use(express.json());
 
 // ==========================
